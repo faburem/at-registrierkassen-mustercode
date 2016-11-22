@@ -450,7 +450,7 @@ public class CashBoxApi {
 			try {
 				parameters = (JSONObject) JSONValue.parseWithException(isr);
 			} catch (Exception e1) {
-				String response = "somethings not quite right with your JSON..";
+				String response = "somethings not quite right with your JSON: " + e1.getMessage();
 				/*for (String key : parameters.keySet())
 					response += key + " = " + parameters.get(key) + "\n";*/
 				he.sendResponseHeaders(404, response.length());
@@ -486,7 +486,7 @@ public class CashBoxApi {
 			receiptRepresentationForSignature.setEncryptedTurnoverValue(encryptTurnOverCounter(parameters.get("cashboxID").toString(),parameters.get("receiptID").toString(),rkSuite,Long.parseLong(parameters.get("turnoverCounter").toString()),8,cashBoxParameters));
 			receiptRepresentationForSignature.setSignatureCertificateSerialNumber(parameters.get("certificateID").toString());
 			receiptRepresentationForSignature.setSignatureValuePreviousReceipt(calculateChainValue(cashBoxParameters, previousReceiptJWSRepresentation, rkSuite));
-			
+
 			// send response
 			String response = receiptRepresentationForSignature.getDataToBeSigned(rkSuite);
 			he.sendResponseHeaders(200, response.length());
