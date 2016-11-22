@@ -18,5 +18,5 @@ COPY regkassen-core/ /usr/src/regkasse/regkassen-core/
 WORKDIR /usr/src/regkasse/regkassen-core
 RUN mvn install
 
-WORKDIR /usr/src/regkasse/regkassen-core/target/classes
-CMD ["java","at.asitplus.regkassen.core.CashBoxApi"]
+WORKDIR /usr/src/regkasse/regkassen-core/target/
+CMD ["java","-jar","registrierkassen-core-0.7.1.jar"]

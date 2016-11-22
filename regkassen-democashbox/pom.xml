@@ -17,8 +17,8 @@
         </dependency>
         <dependency>
             <groupId>at.asitplus</groupId>
-            <artifactId>regkassen-verification-common</artifactId>
-            <version>1.0.10</version>
+            <artifactId>regkassen-common</artifactId>
+            <version>0.10</version>
         </dependency>
 
         <!-- Apache commons libraries for BASE64, BASE64, math operations etc.
