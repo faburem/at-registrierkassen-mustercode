@@ -30,6 +30,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.Scanner;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.IllegalBlockSizeException;
@@ -39,9 +40,9 @@ import javax.crypto.spec.SecretKeySpec;
 import org.jose4j.json.internal.json_simple.JSONObject;
 import org.jose4j.json.internal.json_simple.JSONValue;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
+import static spark.Spark.*;
+
+import org.apache.commons.lang3.StringEscapeUtils;
 
 import at.asitplus.regkassen.common.RKSuite;
 import at.asitplus.regkassen.common.util.CashBoxUtils;
@@ -59,25 +60,62 @@ public class CashBoxApi {
 	//parameters for cashbox initialisation (AES key, cashbox ID etc.)
 	protected CashBoxParameters cashBoxParameters;
 
-	//internal turnover counter... starts with 0
-
-
 	public static void main(String[] args) {
-		int port = 9000;
 		try{
-			HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-			System.out.println("server started at " + port);
-			server.createContext("/encodeBelegData", new EncodeBelegDataHandler());
-			server.setExecutor(null);
-			server.start();
+			System.out.println("server started at " + 9000);
+			port(9000);
+			get("/test",(request,response) -> {
+				return "bubu";
+			});
+			post("/encodeBelegData", (request, response) -> {
+				JSONObject parameters = null;
+				try {
+					parameters = (JSONObject) JSONValue.parseWithException(request.body());
+				} catch (Exception e1) {
+					String responseText = "somethings not quite right with your JSON: " + e1.getMessage();
+					// System.out.println(responseText);
+					response.status(404);
+					return responseText;
+				}
+				RKSuite rkSuite = RKSuite.R1_AT0;
+				String previousReceiptJWSRepresentation = parameters.get("previousJWSRepresentation").toString();
+				SimpleDateFormat df = new SimpleDateFormat( "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" );
+				Date receiptDate = new Date();
+				if(parameters.get("receiptTime").toString() != ""){
+					try {
+						receiptDate = df.parse(parameters.get("receiptTime").toString());
+					} catch (ParseException e) {
+						// TODO Auto-generated catch block
+						System.out.println(e.getMessage());
+					}
+				}
+				CashBoxParameters cashBoxParameters = new CashBoxParameters();
+				cashBoxParameters.setCashBoxId(parameters.get("cashboxID").toString());
+				cashBoxParameters.setCompanyID(parameters.get("companyId").toString());
+				cashBoxParameters.setTurnOverCounterAESKey(new SecretKeySpec(parameters.get("turnOverCounterAESKey").toString().getBytes(),"AES"));
+				cashBoxParameters.setTurnOverCounterLengthInBytes(8);
+				ReceiptRepresentationForSignature receiptRepresentationForSignature = new ReceiptRepresentationForSignature();
+				receiptRepresentationForSignature.setCashBoxID(parameters.get("cashboxID").toString());
+				receiptRepresentationForSignature.setReceiptIdentifier(parameters.get("receiptID").toString());
+				receiptRepresentationForSignature.setReceiptDateAndTime(receiptDate);
+				receiptRepresentationForSignature.setSumTaxSetNormal(Double.parseDouble(parameters.get("taxNormal").toString()));
+				receiptRepresentationForSignature.setSumTaxSetErmaessigt1(Double.parseDouble(parameters.get("taxErmaessigt1").toString()));
+				receiptRepresentationForSignature.setSumTaxSetErmaessigt2(Double.parseDouble(parameters.get("taxErmaessigt2").toString()));
+				receiptRepresentationForSignature.setSumTaxSetNull(Double.parseDouble(parameters.get("taxNull").toString()));
+				receiptRepresentationForSignature.setSumTaxSetBesonders(Double.parseDouble(parameters.get("taxBesonders").toString()));
+				receiptRepresentationForSignature.setEncryptedTurnoverValue(encryptTurnOverCounter(parameters.get("cashboxID").toString(),parameters.get("receiptID").toString(),rkSuite, (long) Double.parseDouble(parameters.get("turnoverCounter").toString()),8,cashBoxParameters));
+				receiptRepresentationForSignature.setSignatureCertificateSerialNumber(parameters.get("certificateID").toString());
+				receiptRepresentationForSignature.setSignatureValuePreviousReceipt(calculateChainValue(cashBoxParameters, previousReceiptJWSRepresentation, rkSuite));
+				// send response
+				String responseText = receiptRepresentationForSignature.getDataToBeSigned(rkSuite);
+				response.header("Access-Control-Allow-Origin", "*");
+				response.type("text/plain");
+				return responseText;
+			 });
 		} catch(Exception e){
 			System.out.println("Exception caught: "+e);
 		}
 	}
-	// public DemoCashBox(CashBoxParameters cashBoxParameters) {
-	//     this.cashBoxParameters = cashBoxParameters;
-	// }
-
 	/**
 	 * @return cashboxparameter set, used to setup/initialize the cashbox
 	 */
@@ -116,181 +154,6 @@ public class CashBoxApi {
 	public List<byte[]> printReceipt(List<ReceiptPackage> receiptPackageList, ReceiptPrintType receiptPrintType) {
 		return cashBoxParameters.getPrinterModule().printReceipt(receiptPackageList, receiptPrintType);
 	}
-
-	/**
-	 * create and store a receipt according to the data in the instruction
-	 *
-	 * @param cashBoxInstruction
-	 */
-	/*protected void createStoreAndSignReceiptPackage(CashBoxInstruction cashBoxInstruction) {
-        //get signature device and used RKSUITE
-        //as of version 6 the cashbox can be instructed to use a specific signature device
-        JWSModule signatureDevice = cashBoxParameters.getJwsSignatureModules().get(cashBoxInstruction.getUsedSignatureDevice());
-        RKSuite rkSuiteOfSignatureDevice = signatureDevice.getRKSuite();
-
-        //prepare elements of the machine code representation
-        RKSuite el1_rkSuite;
-        String el2_cashboxID;
-        String el3_receiptID;
-        Date el4_timeAndData;
-        double el5_taxSet_NORMAL;
-        double el6_taxSet_ERMAESSIGT1;
-        double el7_taxSet_ERMAESSIGT2;
-        double el8_taxSet_NULL;
-        double el9_taxSet_BESONDERS;
-        String el10_encryptedTurnOverValue;
-        String el11_certificateSerialNumberOrCompanyAndKeyID;
-        String el12_chainValue = "";
-
-        //setup common values that need to be set for every type of receipt
-        el1_rkSuite = signatureDevice.getRKSuite();
-        el2_cashboxID = cashBoxParameters.getCashBoxId();
-        el3_receiptID = cashBoxInstruction.getReceiptIdentifier();
-        el4_timeAndData = null;
-        try {
-            el4_timeAndData = CashBoxUtils.convertISO8601toDate(cashBoxInstruction.getDateToUse());
-        } catch (ParseException e) {
-            System.err.println("Fatal error, cannot parse date from cashbox instruction file: " + cashBoxInstruction.getDateToUse() +  " is not a valid date");
-            System.exit(-1);
-        }
-
-        //if we have an open system, the serial number of the certificate is used
-        //for a closed system, the companyID and the key id of the signing key is used
-        el11_certificateSerialNumberOrCompanyAndKeyID = signatureDevice.getSerialNumberOfKeyID();
-
-        //extract type of receipt that needs to be generated
-        TypeOfReceipt typeOfReceipt = cashBoxInstruction.getTypeOfReceipt();
-
-        //get basic receipt data (tax sets)
-        SimplifiedReceipt simplifiedReceipt = cashBoxInstruction.getSimplifiedReceipt();
-
-        //generate receipt according to its type
-        //this demo cash box is highly simplified and does not execute validity checks (e.g. it is not checked whether all tax sets of a START_BELEG are set to 0,00)
-        //wrong cashbox instructions might lead to a crash, or a a wrong result
-        //all checks are carried out by the validation tool
-        //reason: this code as been strongly simplified in version 0.6 to highlight the essential procedures for each type of receipt
-        if (typeOfReceipt == TypeOfReceipt.START_BELEG) {
-            //in case of a START_BELEG all tax sets are set to 0.0
-            el5_taxSet_NORMAL = 0;
-            el6_taxSet_ERMAESSIGT1 = 0;
-            el7_taxSet_ERMAESSIGT2 = 0;
-            el8_taxSet_NULL = 0;
-            el9_taxSet_BESONDERS = 0;
-
-            //no need to update the turnover counter
-
-            el10_encryptedTurnOverValue = encryptTurnOverCounter(cashBoxParameters.getCashBoxId(), el3_receiptID, rkSuiteOfSignatureDevice,cashBoxParameters.getTurnOverCounterLengthInBytes());
-            //there is no previous receipt for chain value calculation, the cashboxID is used instead
-            el12_chainValue = calculateChainValue(null, rkSuiteOfSignatureDevice);
-        } else if (typeOfReceipt == TypeOfReceipt.STANDARD_BELEG) {
-            el5_taxSet_NORMAL = Precision.round(simplifiedReceipt.getTaxSetNormal(), 2);
-            el6_taxSet_ERMAESSIGT1 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt1(), 2);
-            el7_taxSet_ERMAESSIGT2 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt2(), 2);
-            el8_taxSet_NULL = Precision.round(simplifiedReceipt.getTaxSetNull(), 2);
-            el9_taxSet_BESONDERS = Precision.round(simplifiedReceipt.getTaxSetBesonders(), 2);
-
-            //update turnover counter by adding all tax sets
-            updateTurnOverCounter(simplifiedReceipt);
-            el10_encryptedTurnOverValue = encryptTurnOverCounter(cashBoxParameters.getCashBoxId(), el3_receiptID, rkSuiteOfSignatureDevice,cashBoxParameters.getTurnOverCounterLengthInBytes());
-            if (getStoredReceipts().size() > 0) {
-                el12_chainValue = calculateChainValue(getStoredReceipts().get(getStoredReceipts().size() - 1).getJwsCompactRepresentation(), rkSuiteOfSignatureDevice);
-            }
-        } else if (typeOfReceipt == TypeOfReceipt.STORNO_BELEG) {
-            el5_taxSet_NORMAL = Precision.round(simplifiedReceipt.getTaxSetNormal(), 2);
-            el6_taxSet_ERMAESSIGT1 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt1(), 2);
-            el7_taxSet_ERMAESSIGT2 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt2(), 2);
-            el8_taxSet_NULL = Precision.round(simplifiedReceipt.getTaxSetNull(), 2);
-            el9_taxSet_BESONDERS = Precision.round(simplifiedReceipt.getTaxSetBesonders(), 2);
-
-            updateTurnOverCounter(simplifiedReceipt);
-            el10_encryptedTurnOverValue = CashBoxUtils.base64Encode("STO".getBytes(), false);
-            if (getStoredReceipts().size() > 0) {
-                el12_chainValue = calculateChainValue(getStoredReceipts().get(getStoredReceipts().size() - 1).getJwsCompactRepresentation(), rkSuiteOfSignatureDevice);
-            }
-        } else if (typeOfReceipt == TypeOfReceipt.TRAINING_BELEG) {
-            el5_taxSet_NORMAL = Precision.round(simplifiedReceipt.getTaxSetNormal(), 2);
-            el6_taxSet_ERMAESSIGT1 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt1(), 2);
-            el7_taxSet_ERMAESSIGT2 = Precision.round(simplifiedReceipt.getTaxSetErmaessigt2(), 2);
-            el8_taxSet_NULL = Precision.round(simplifiedReceipt.getTaxSetNull(), 2);
-            el9_taxSet_BESONDERS = Precision.round(simplifiedReceipt.getTaxSetBesonders(), 2);
-
-            //turnover counter is not updated!
-
-            el10_encryptedTurnOverValue = CashBoxUtils.base64Encode("TRA".getBytes(), false);
-            if (getStoredReceipts().size() > 0) {
-                el12_chainValue = calculateChainValue(getStoredReceipts().get(getStoredReceipts().size() - 1).getJwsCompactRepresentation(), rkSuiteOfSignatureDevice);
-            }
-        } else if (typeOfReceipt == TypeOfReceipt.NULL_BELEG) {
-            //no need to update the turnover counter
-            el5_taxSet_NORMAL = 0;
-            el6_taxSet_ERMAESSIGT1 = 0;
-            el7_taxSet_ERMAESSIGT2 = 0;
-            el8_taxSet_NULL = 0;
-            el9_taxSet_BESONDERS = 0;
-
-            //turnover counter is not updated, since all tax-sets of a Nullbeleg are set to 0
-
-            el10_encryptedTurnOverValue = encryptTurnOverCounter(cashBoxParameters.getCashBoxId(), el3_receiptID, rkSuiteOfSignatureDevice,cashBoxParameters.getTurnOverCounterLengthInBytes());
-            if (getStoredReceipts().size() > 0) {
-                el12_chainValue = calculateChainValue(getStoredReceipts().get(getStoredReceipts().size() - 1).getJwsCompactRepresentation(), rkSuiteOfSignatureDevice);
-            }
-        } else {
-            return;
-        }
-
-        //create data structure that contains the data that needs to be signed
-        ReceiptRepresentationForSignature receiptRepresentationForSignature = new ReceiptRepresentationForSignature();
-        receiptRepresentationForSignature.setCashBoxID(el2_cashboxID);
-        receiptRepresentationForSignature.setReceiptIdentifier(el3_receiptID);
-        receiptRepresentationForSignature.setReceiptDateAndTime(el4_timeAndData);
-        receiptRepresentationForSignature.setSumTaxSetNormal(el5_taxSet_NORMAL);
-        receiptRepresentationForSignature.setSumTaxSetErmaessigt1(el6_taxSet_ERMAESSIGT1);
-        receiptRepresentationForSignature.setSumTaxSetErmaessigt2(el7_taxSet_ERMAESSIGT2);
-        receiptRepresentationForSignature.setSumTaxSetNull(el8_taxSet_NULL);
-        receiptRepresentationForSignature.setSumTaxSetBesonders(el9_taxSet_BESONDERS);
-        receiptRepresentationForSignature.setEncryptedTurnoverValue(el10_encryptedTurnOverValue);
-        receiptRepresentationForSignature.setSignatureCertificateSerialNumber(el11_certificateSerialNumberOrCompanyAndKeyID);
-        receiptRepresentationForSignature.setSignatureValuePreviousReceipt(el12_chainValue);
-
-        //prepare signature data
-        String plainData = receiptRepresentationForSignature.getDataToBeSigned(el1_rkSuite);
-
-        //sign receipt
-        String signedJWSCompactRep = signatureDevice.signMachineCodeRepOfReceipt(plainData, cashBoxInstruction.isSignatureDeviceDamaged());
-
-        //store receipt to DEP
-        ReceiptPackage receiptPackage = new ReceiptPackage();
-        receiptPackage.setCertificateChain(signatureDevice.getSignatureModule().getCertificateChain());
-        receiptPackage.setSigningCertificate(signatureDevice.getSignatureModule().getSigningCertificate());
-        receiptPackage.setJwsCompactRepresentation(signedJWSCompactRep);
-        cashBoxParameters.getDepModul().storeReceipt(receiptPackage);
-    }*/
-
-	/**
-	 * update turnover counter
-	 *
-	 * @param SimplifiedReceipt
-	 */
-	/*    protected void updateTurnOverCounter(SimplifiedReceipt SimplifiedReceipt) {
-        //if we have a receipt for training purposes, we don't change the turnover counter
-        double sumTaxTypeNormal = Precision.round(SimplifiedReceipt.getTaxSetNormal(), 2);
-        double sumTaxTypeErmaessigt1 = Precision.round(SimplifiedReceipt.getTaxSetErmaessigt1(), 2);
-        double sumTaxTypeErmaessigt2 = Precision.round(SimplifiedReceipt.getTaxSetErmaessigt2(), 2);
-        double sumTaxTypeNull = Precision.round(SimplifiedReceipt.getTaxSetNull(), 2);
-        double sumTaxTypeBesonders = Precision.round(SimplifiedReceipt.getTaxSetBesonders(), 2);
-
-        //add all taxset sums
-        long tempSum = 0;
-        tempSum += Precision.round(sumTaxTypeNormal*100,0);
-        tempSum += Precision.round(sumTaxTypeErmaessigt1*100,0);
-        tempSum += Precision.round(sumTaxTypeErmaessigt2*100,0);
-        tempSum += Precision.round(sumTaxTypeNull*100,0);
-        tempSum += Precision.round(sumTaxTypeBesonders*100,0);
-
-
-        //convert sum to €-cent and add to turnover counter
-        turnoverCounter += (tempSum);
-    }*/
 
 	/**
 	 * encrypt the current turnover counter
@@ -436,99 +299,4 @@ public class CashBoxApi {
 		}
 		return null;
 	}
-	private static class EncodeBelegDataHandler implements HttpHandler {
-
-		@Override
-		public void handle(HttpExchange he) throws IOException {
-			// parse request
-			//Map<String, Object> parameters = new HashMap<String, Object>();
-			InputStreamReader isr = new InputStreamReader(he.getRequestBody(), "utf-8");
-			//BufferedReader br = new BufferedReader(isr);
-
-			//parseQuery(query, parameters);
-			JSONObject parameters = null;
-			try {
-				parameters = (JSONObject) JSONValue.parseWithException(isr);
-			} catch (Exception e1) {
-				String response = "somethings not quite right with your JSON: " + e1.getMessage();
-				/*for (String key : parameters.keySet())
-					response += key + " = " + parameters.get(key) + "\n";*/
-				he.sendResponseHeaders(404, response.length());
-				OutputStream os = he.getResponseBody();
-				os.write(response.toString().getBytes());
-				os.close();
-				e1.printStackTrace();
-			}
-			RKSuite rkSuite = RKSuite.R1_AT0;
-			String previousReceiptJWSRepresentation = parameters.get("previousJWSRepresentation").toString();
-			SimpleDateFormat df = new SimpleDateFormat( "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" );
-			Date receiptDate = new Date();
-			try {
-				receiptDate = df.parse(parameters.get("receiptTime").toString());
-			} catch (ParseException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-			CashBoxParameters cashBoxParameters = new CashBoxParameters();
-			cashBoxParameters.setCashBoxId(parameters.get("cashboxID").toString());
-			cashBoxParameters.setCompanyID(parameters.get("companyId").toString());
-			cashBoxParameters.setTurnOverCounterAESKey(new SecretKeySpec(parameters.get("turnOverCounterAESKey").toString().getBytes(),"AES"));
-			cashBoxParameters.setTurnOverCounterLengthInBytes(8);
-			ReceiptRepresentationForSignature receiptRepresentationForSignature = new ReceiptRepresentationForSignature();
-			receiptRepresentationForSignature.setCashBoxID(parameters.get("cashboxID").toString());
-			receiptRepresentationForSignature.setReceiptIdentifier(parameters.get("receiptID").toString());
-			receiptRepresentationForSignature.setReceiptDateAndTime(receiptDate);
-			receiptRepresentationForSignature.setSumTaxSetNormal(Double.parseDouble(parameters.get("taxNormal").toString()));
-			receiptRepresentationForSignature.setSumTaxSetErmaessigt1(Double.parseDouble(parameters.get("taxErmaessigt1").toString()));
-			receiptRepresentationForSignature.setSumTaxSetErmaessigt2(Double.parseDouble(parameters.get("taxErmaessigt2").toString()));
-			receiptRepresentationForSignature.setSumTaxSetNull(Double.parseDouble(parameters.get("taxNull").toString()));
-			receiptRepresentationForSignature.setSumTaxSetBesonders(Double.parseDouble(parameters.get("taxBesonders").toString()));
-			receiptRepresentationForSignature.setEncryptedTurnoverValue(encryptTurnOverCounter(parameters.get("cashboxID").toString(),parameters.get("receiptID").toString(),rkSuite,Long.parseLong(parameters.get("turnoverCounter").toString()),8,cashBoxParameters));
-			receiptRepresentationForSignature.setSignatureCertificateSerialNumber(parameters.get("certificateID").toString());
-			receiptRepresentationForSignature.setSignatureValuePreviousReceipt(calculateChainValue(cashBoxParameters, previousReceiptJWSRepresentation, rkSuite));
-
-			// send response
-			String response = receiptRepresentationForSignature.getDataToBeSigned(rkSuite);
-			he.sendResponseHeaders(200, response.length());
-			OutputStream os = he.getResponseBody();
-			os.write(response.toString().getBytes());
-			os.close();
-		}
-	}
-	/*static void parseQuery(String query, Map<String, Object> parameters) throws UnsupportedEncodingException {
-
-		if (query != null) {
-			String pairs[] = query.split("[&]");
-			for (String pair : pairs) {
-				String param[] = pair.split("[=]");
-				String key = null;
-				String value = null;
-				if (param.length > 0) {
-					key = URLDecoder.decode(param[0],
-							System.getProperty("file.encoding"));
-				}
-
-				if (param.length > 1) {
-					value = URLDecoder.decode(param[1],
-							System.getProperty("file.encoding"));
-				}
-
-				if (parameters.containsKey(key)) {
-					Object obj = parameters.get(key);
-					if (obj instanceof List<?>) {
-						List<String> values = (List<String>) obj;
-						values.add(value);
-
-					} else if (obj instanceof String) {
-						List<String> values = new ArrayList<String>();
-						values.add((String) obj);
-						values.add(value);
-						parameters.put(key, values);
-					}
-				} else {
-					parameters.put(key, value);
-				}
-			}
-		}
-	}*/
 }
