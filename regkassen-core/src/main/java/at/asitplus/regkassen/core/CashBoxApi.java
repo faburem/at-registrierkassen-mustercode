@@ -62,11 +62,8 @@ public class CashBoxApi {
 
 	public static void main(String[] args) {
 		try{
-			System.out.println("server started at " + 9000);
+			System.out.println("server started on port " + 9000);
 			port(9000);
-			get("/test",(request,response) -> {
-				return "bubu";
-			});
 			post("/encodeBelegData", (request, response) -> {
 				JSONObject parameters = null;
 				try {
@@ -77,7 +74,7 @@ public class CashBoxApi {
 					response.status(404);
 					return responseText;
 				}
-				RKSuite rkSuite = RKSuite.R1_AT0;
+				RKSuite rkSuite = RKSuite.R1_AT1;
 				String previousReceiptJWSRepresentation = parameters.get("previousJWSRepresentation").toString();
 				SimpleDateFormat df = new SimpleDateFormat( "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" );
 				Date receiptDate = new Date();
@@ -92,7 +89,7 @@ public class CashBoxApi {
 				CashBoxParameters cashBoxParameters = new CashBoxParameters();
 				cashBoxParameters.setCashBoxId(parameters.get("cashboxID").toString());
 				cashBoxParameters.setCompanyID(parameters.get("companyId").toString());
-				cashBoxParameters.setTurnOverCounterAESKey(new SecretKeySpec(parameters.get("turnOverCounterAESKey").toString().getBytes(),"AES"));
+				cashBoxParameters.setTurnOverCounterAESKey(CryptoUtil.convertBase64KeyToSecretKey(parameters.get("turnOverCounterAESKey").toString()));
 				cashBoxParameters.setTurnOverCounterLengthInBytes(8);
 				ReceiptRepresentationForSignature receiptRepresentationForSignature = new ReceiptRepresentationForSignature();
 				receiptRepresentationForSignature.setCashBoxID(parameters.get("cashboxID").toString());
